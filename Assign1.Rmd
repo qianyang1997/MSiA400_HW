@@ -1,7 +1,7 @@
 ---
 title: "MSiA 400 Lab Assignment 1"
 subtitle: "Due Oct 13 at 5pm"
-output: pdf_document
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
@@ -41,6 +41,8 @@ Traffic
 
 Draw a directed graph where each node represents a state, and each arrow from State $i$ to State $j$ has positive (non-zero) traffic (i.e., `Traffic[i,j]>0`). This may be submitted as a TikZ graph (or using your graphing program of choice) or a picture of a hand-drawn graph (provided it is legible). Is the Markov chain irreducible? Is the Markov chain ergodic? Explain.
 
+!["markov_chain"](markov_chain.jpg)
+
 The Markov chain is irreducible, because you can get to every state (webpage) from any other state. More specifically, you can get to any state from state 1, and states 2-8 all point to 9. For any state i and j, if j = 1, then you can go from j to i. If j does not equal 1, then you can go from j to 9, 9 to 1, and 1 to i. 
 
 The Markov chain is ergodic. Since it's irreducible, all states in the Markov chain share one communicating class. Therefore, these states must all be recurrent or all be transient. Since there is a finite number of states, the chain will return to each particular state an infinite number of times, so all states are recurrent. Also note that states 2-8 can directly pass to themselves, so these states are aperiodic. State 1 can return to itself via 1 - 3 - 9 - 1 (3 steps) or 1 - 2 - 4 - 9 - 1 (4 steps), with 1 as the greatest common divisor, so state 1 is aperiodic. Equivalently, state 9 can return to itself via 9 - 1 - 3 - 9 and 9 - 1 - 2 - 4 - 9, so it's also aperiodic. Thus, all states are aperiodic. Since all states are recurrent and periodic, the Markov chain is ergodic.
@@ -52,6 +54,7 @@ Construct and display the one-step transition probability matrix `P` (using the 
 
 ```{r}
 tmp <- rowSums(Traffic)
+rowSums(Traffic)
 P <- Traffic / tmp
 P
 ```
@@ -113,11 +116,7 @@ Use Monte Carlo integration to estimate the integral $\int\limits_0^\infty e^{-\
 
 Determine the number of samples required to achieve an error tolerance of $10^{-3}$ with 99\% confidence.
 
-```{r}
-
-
-
-```
+Answer: number of samples needed to meet tolerance with (1 - $\delta$) confidence is$n \geq \frac{var[p(x)]}{(tolerance)^2\delta}$, so $n \geq \frac{\frac{1}{\lambda^2}}{0.001^2 * 0.01} = \frac{1*10^8}{\lambda^2}$
 
 
 ## Problem 2b
@@ -200,6 +199,8 @@ Are the samples generated in Problem 3b sufficiently random? How can you tell?
 ```{r}
 
 acf(x)
+
+# the only significant spike of the autocorrelation plot is at lag 0. From lag 1 and beyond, the autorrelation coefficient is less than 0.2, signifying that the samples are independent of each other. Therefore, we can concluded that the samples are sufficiently random.
 
 ```
 
