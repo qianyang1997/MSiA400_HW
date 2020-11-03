@@ -1,0 +1,201 @@
+---
+title: "Assign3"
+author: "Qiana Yang"
+date: "10/31/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(e1071)
+library(DMwR)
+library(distr)
+library(caret)
+```
+1(a)
+!["1(a)"](1(a).jpg)
+
+1(b)
+!["1(b)"](1(b).jpg)
+
+2(a)
+!["2(a)1"](2(a).jpg)
+!["2(a)2"](2(a)2.jpg)
+!["2(a)3"](2(a)3.jpg)
+
+```{r}
+# in summary, first hidden state has probability 0.619 when the second state is fair, and 0.153 when the second state is weighted. Last hidden state has probability 0.765 when the state prior is fair, and 0.265 when the state prior is weighted.
+
+# in general, we can use an algorithm to calculate rest of the "in-between" probabilities of the hidden states:
+
+outcome <- c(4, 4, 5, 2, 2, 4, 6, 6, 1, 4, 1, 1, 3, 5, 5, 2, 5, 4, 2, 1)
+weight <- data.frame("dice"=c(1,2,3,4,5,6), "probability"=c(2/13, 2/13, 1/13, 4/13, 2/13, 2/13))
+
+# build function based on formula for finding pi = fair for inner states
+find_p_current <- function(state_before, state_after, index_current) {
+  if (state_before == 0 & state_after == 0) {
+    p_current <- (0.75^2/6)/(0.75^2/6 + 0.25^2*weight[weight$dice==outcome[index_current], "probability"])
+  } else if (state_before != state_after) {
+    p_current <- (1/6)/(1/6 + weight[weight$dice==outcome[index_current], "probability"])
+  } else {
+    p_current <- (0.25^2/6)/(0.25^2/6 + 0.75^2*weight[weight$dice==outcome[index_current], "probability"])
+  }
+}
+
+# make a table: column 1 is the index of the current state from 2 to 19. For the rest of the columns, the header indicates the assumed states before and after the current state. For example, the "fair_fair" column assumes that the state before the current state is fair and the state after is fair.
+
+fair_fair <- c()
+fair_weight <- c()
+weight_fair <- c()
+weight_weight <- c()
+
+for (index_current in seq(2, 19, 1)) {
+  fair_fair[index_current] <- find_p_current(0, 0, index_current)
+  fair_weight[index_current] <- find_p_current(0, 1, index_current)
+  weight_fair[index_current] <- find_p_current(1, 0, index_current)
+  weight_weight[index_current] <- find_p_current(1, 1, index_current)
+}
+
+p_inner_states <- data.frame(state_index=seq(1,19,1), fair_fair, fair_weight, weight_fair, weight_weight)[-1,]
+
+# table demonstrates the probabilities that the hidden states are fair given all the conditions
+p_inner_states
+```
+
+
+2(b)
+```{r}
+# define a function that returns TRUE when p < p(pi_i = fair), and FALSE when p >(pi_i = fair)
+set.seed(12)
+pdist <- function(p){return(runif(1)<p)}
+
+# initialize
+initial <- rep(TRUE, 20)
+pi <- c()
+cumulative <- data.frame()[1:20,]
+
+# gibbs sampling
+for (i in seq(1, 10500, 1)) {
+  
+  if (initial[2] == TRUE) {
+    pi[1] <- pdist(0.619)
+  } else {
+    pi[1] <- pdist(0.153)
+  }
+  
+  if (initial[19] == TRUE) {
+    pi[20] <- pdist(0.765)
+  } else {
+    pi[20] <- pdist(0.265)
+  }
+  
+  for (j in seq(2, 19, 1)) {
+    if (initial[j - 1] == TRUE & initial[j + 1] == TRUE) {
+      pi[j] <- pdist(p_inner_states[p_inner_states$state_index==j, 2])
+    } else if (initial[j - 1] != initial[j + 1]) {
+      pi[j] <- pdist(p_inner_states[p_inner_states$state_index==j, 3]) 
+    } else {
+      pi[j] <- pdist(p_inner_states[p_inner_states$state_index==j, 5])
+    }
+  }
+  
+  initial <- pi
+  cumulative[i] <- pi
+}
+
+# check the probability that each pi is fair
+result <- rowSums(cumulative[, -500])/10000
+plot(result)
+
+```
+
+
+3(a)
+```{r}
+
+# find test and training sets from Assign2
+
+gradAdmit <- read.csv(here::here("gradAdmit.csv"))
+set.seed(12345)
+n <- nrow(gradAdmit)
+sample <- sample.int(n = n, size = floor(.2 * n), replace = F)
+train <- gradAdmit[-sample,]
+test <- gradAdmit[sample,]
+
+# check class balance
+table(train$admit)
+sum(train$admit)/nrow(train)
+table(test$admit)
+sum(test$admit)/nrow(test)
+# in both sets of data, the # of rejects is much higher than the # of admits. In the training set, 31% are admitted. In the test set, 35% students are admitted.
+
+```
+
+3(b)
+```{r}
+# best model from Assign2 and its predictions on the test set
+retrain <- svm(formula = factor(admit)~., 
+      data = train,
+      scale = T,
+      kernel = "radial",
+      gamma = 0.2,
+      cost = 8
+      )
+repredict <- predict(retrain, test, type="reponse")
+table(factor(test$admit), repredict) # rows are actual values, columns are predicted values
+# precision = 0.56, recall= 0.18, specificity= 0.92
+
+```
+3(c)
+```{r}
+# to achieve a 1:1 ratio, we need 221-99 = 122 more samples, so that's 100% * 122/99 = 123% of the current minority sample.
+
+train$admit <- factor(train$admit)
+newData = SMOTE(admit~., train, perc.over=123, perc.under=0)
+
+# combine with original training set
+newTrain <- train[train$admit==0,]
+newTrain <- rbind(newTrain, newData)
+table(newTrain$admit)
+# the new class balance is approx. 1:1. 
+
+```
+
+3(d)
+```{r}
+# retrain the model on the training set
+reretrain <- svm(formula = admit~., 
+      data = newTrain,
+      scale = T,
+      kernel = "radial",
+      gamma = 0.2,
+      cost = 8
+      )
+rerepredict <- predict(reretrain, test, type="reponse")
+table(factor(test$admit), rerepredict)
+# new precision is 0.53, recall is 0.57, specificity is 0.73.
+
+```
+
+
+4(c)
+Because $g^2(x)p(x)>0$ when $x\geq10\pi$ and equals $0$ otherwise, we want to find a $p^*(x)$ that's "larger" than $p(x)$ when $x\geq10\pi$ and equals $0$ when $x<10\pi$. We can find this function by setting $p^*(x)$ as $p(x)$ with a horizontal shift to the right (in other words, $p^*(x)=e^{-x-c}$ for some positive constant $c$) and set it as $0$ for $x<10\pi$. In practice, when we try to sample from it in R, the results are not as promising due to software restrictions. Therefore, we shift $p*(x)$ to the left by $10\pi$ ($p*(X)=e^{-x+10\pi}$) for $x\geq0$, and set it to $0$ for $x<0$.
+
+4(d)
+```{r}
+set.seed(1234)
+sample <- rexp(10^6, 1)
+
+sum <- 0
+for(i in sample){
+    sum <- sum + sin(i) * exp(-10*pi)
+}
+
+estimate <- sum/10^6 
+estimate # estimate of the integral is 1.135857e-14, which is very close to the real value (1.135551e-14).
+
+```
