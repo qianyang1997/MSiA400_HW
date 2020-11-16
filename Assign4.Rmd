@@ -1,0 +1,222 @@
+---
+title: "Assign4"
+author: "Qiana Yang"
+date: "11/13/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(e1071)
+library(DMwR)
+library(MASS)
+library(mice)
+```
+
+```{r}
+redwine <- read.csv(here::here("redwine.txt"), sep="\t")
+head(redwine)
+```
+
+
+1
+```{r}
+for (variable in names(redwine)) {
+  # histogram
+  hist(redwine[[variable]], main = paste("Histogram of" , variable))
+  
+  # box and whisker
+  boxplot(redwine[[variable]], main = paste("Box plot of", variable))
+  # CA has a significant outlier (close to 1.0). SD has 2 significant outliers in the 250-300 range. I wouldn't call any other values outside the |1.5| range significant outliers, because the respective columns are either skewed or have different clusters of values. 
+  
+  # skewness
+  print(paste("skewness of", variable, "is", skewness(redwine[[variable]], na.rm=T)))
+  # all columns are skewed to the right with DE being approximately more centered. 
+  
+  # kurtosis
+  print(paste("kurtosis of", variable, "is", kurtosis(redwine[[variable]], na.rm=T)))
+  # QA, FA, VA, CA, DE, AL are platykurtic with kurtosis below 3. RS, CH, PH, SU are leptokurtic, with kurtosis above 3. FS, SD are pretty close to 3 (2 and 3.9 respectively), so here I consider them as mesokurtic.
+  
+  # QQ plot
+  par(cex=0.7); qqnorm(redwine[[variable]])
+  abline(a=mean(redwine[[variable]], na.rm=TRUE), b=sd(redwine[[variable]], na.rm=TRUE),col="red")
+  # The QQ plots confirm previous questions. All curves concave up in the middle portion, signifying a right skew. Platykurtic columns have plots with a slight "S" shape, signifying thin tails. Leptokurtic columns hae plots with a slight "N" shape  (or flipped "S") at the two tails, signifying fat tails.
+} 
+
+```
+
+
+2a
+```{r}
+# missing values in each variable
+colSums(is.na(redwine)) 
+# 22 missing values in RS, 17 in SD
+
+# missing values in each sample
+sum(rowSums(is.na(redwine))[rowSums(is.na(redwine)) != 0])
+# total of 39 samples have missing values
+
+```
+
+2b-g - setup
+```{r}
+# split the data set into 5 folds
+index1 <- seq(1, nrow(redwine), 5)
+index2 <- seq(2, nrow(redwine), 5)
+index3 <- seq(3, nrow(redwine), 5)
+index4 <- seq(4, nrow(redwine), 5)
+index5 <- seq(5, nrow(redwine), 5)
+
+# random sampling for imputation
+random_imp <- function(index) {
+  imputed <- redwine
+  sampleFromRS <- imputed[-index, "RS"][!is.na(imputed[-index, "RS"])]
+  sampleFromSD <- imputed[-index, "SD"][!is.na(imputed[-index, "SD"])]
+  imputed$RS[is.na(imputed$RS)] <- sample(sampleFromRS, sum(is.na(imputed$RS)), replace=TRUE)
+  imputed$SD[is.na(imputed$SD)] <- sample(sampleFromSD, sum(is.na(imputed$SD)), replace=TRUE)
+  test <- imputed[index,]
+  train <- imputed[-index,]
+  return(list(test, train))
+}
+
+# most common value method for imputation
+Mode <- function(index) {
+  imputed <- redwine
+  imputed$RS[is.na(imputed$RS)] <- as.numeric(names(sort(table(imputed[-index, "RS"]), decreasing=T))[1])
+  imputed$SD[is.na(imputed$SD)] <- as.numeric(names(sort(table(imputed[-index, "SD"]), decreasing=T))[1])
+  test <- imputed[index,]
+  train <- imputed[-index,]
+  return(list(test, train))
+}
+
+# average value method
+avg <- function(index) {
+  imputed <- redwine
+  imputed$RS[is.na(imputed$RS)] <- mean(imputed[-index, "RS"], na.rm=T)
+  imputed$SD[is.na(imputed$SD)] <- mean(imputed[-index, "SD"], na.rm=T)
+  test <- imputed[index,]
+  train <- imputed[-index,]
+  return(list(test, train))
+}
+
+# 5-NN
+NN5 <- function(index) {
+  test <- knnImputation(redwine[index,], distData = redwine[-index,])
+  train <- knnImputation(redwine[-index,])
+  return(list(test, train))
+}
+
+PMM <- function(index) {
+  
+  imputed <- redwine
+  placeholder <- redwine
+   
+  # set random placeholder for missing values
+  placeholder$RS[is.na(placeholder$RS)] <- mean(placeholder$RS, na.rm=T)
+  placeholder$SD[is.na(placeholder$SD)] <- mean(placeholder$SD, na.rm=T)
+  
+  # define test and training sets
+  isTrain <- c(rep(FALSE, nrow(placeholder[index,])), rep(TRUE, nrow(placeholder[-index,])))
+  
+  # identify index of missing values in each column
+  missRS <- which(is.na(imputed$RS))
+  missSD <- which(is.na(imputed$SD))
+  isNARS <- is.na(imputed$RS)
+  isNASD <- is.na(imputed$SD)
+  
+  # iterate 5 times
+  for (i in 1:5) {
+    # impute the RS and SD columns
+    placeholder[missRS, "RS"] <- mice.impute.pmm(y=placeholder$RS, ry=isTrain, x=placeholder[, !colnames(placeholder)%in%c("QA", "RS")], wy=isNARS)
+    placeholder[missSD, "SD"] <- mice.impute.pmm(y=placeholder$SD, ry=isTrain, x=placeholder[, !colnames(placeholder)%in%c("QA", "SD")], wy=isNASD)
+  }
+  
+  test <- placeholder[index,]
+  train <- placeholder[-index,]
+  return(list(test, train))
+}
+
+delNA <- function(index) {
+  nomiss <- redwine
+  test <- na.omit(nomiss[index,])
+  train <- na.omit(nomiss[-index,])
+  return(list(test, train))
+}
+
+# imputation, cross validation, linear regression, and calculate MSE
+getMSE <- function(FUN) {
+
+  # generate the 5 test & training sets
+  imp.test1 <- data.frame(FUN(index1)[1])
+  imp.test2 <- data.frame(FUN(index2)[1])
+  imp.test3 <- data.frame(FUN(index3)[1])
+  imp.test4 <- data.frame(FUN(index4)[1])
+  imp.test5 <- data.frame(FUN(index5)[1])
+  
+  imp.train1 <- data.frame(FUN(index1)[2])
+  imp.train2 <- data.frame(FUN(index2)[2])
+  imp.train3 <- data.frame(FUN(index3)[2])
+  imp.train4 <- data.frame(FUN(index4)[2])
+  imp.train5 <- data.frame(FUN(index5)[2])
+  
+  # linear regression
+  fit1 <- lm(QA~., imp.train1)
+  fit2 <- lm(QA~., imp.train2)
+  fit3 <- lm(QA~., imp.train3)
+  fit4 <- lm(QA~., imp.train4)
+  fit5 <- lm(QA~., imp.train5)
+  
+  # MSE function
+  MSE <- function(y, fit, n) 1/n * sum((y - fit)^2)
+  
+  # calculate MSEs
+    MSE_train <- (MSE(imp.train1$QA, fit1$fitted.values, nrow(imp.train1)) +
+    MSE(imp.train2$QA, fit2$fitted.values, nrow(imp.train2)) + 
+    MSE(imp.train3$QA, fit3$fitted.values, nrow(imp.train3)) + 
+    MSE(imp.train4$QA, fit4$fitted.values, nrow(imp.train4)) + 
+    MSE(imp.train5$QA, fit5$fitted.values, nrow(imp.train5))) / 5
+  
+  MSE_test <- (MSE(imp.test1$QA, predict(fit1, imp.test1), nrow(imp.test1)) + 
+    MSE(imp.test2$QA, predict(fit2, imp.test2), nrow(imp.test2)) + 
+    MSE(imp.test3$QA, predict(fit3, imp.test3), nrow(imp.test3)) + 
+    MSE(imp.test4$QA, predict(fit4, imp.test4), nrow(imp.test4)) + 
+    MSE(imp.test5$QA, predict(fit5, imp.test5), nrow(imp.test5))) / 5
+
+  return(c(MSE_train, MSE_test))
+}
+```
+
+2b-h
+```{r}
+set.seed(1234)
+# Random sampling
+getMSE(random_imp)
+# MSE for the training set is 0.41713, MSE for the test set is 0.4265.
+
+# Most common value
+getMSE(Mode)
+# MSE for the training set is 0.41707, MSE for the test set is 0.4265.
+
+# Average value
+getMSE(avg)
+# MSE for the training set is 0.41694, MSE for the test set is 0.4263.
+
+# 5-NN
+getMSE(NN5)
+# MSE for the training set is 0.41689, MSE for the test set is 0.4261.
+
+# MICE
+getMSE(PMM)
+#PMM for the training set is 0.41728, MSE for the test set is 0.4260.
+
+# delete NA values
+getMSE(delNA)
+# MSE for the training set is 0.41977, MSE for the test set is 0.4295.
+
+# According to the numbers above, PMM performs the best in my case because the average MSE for the test set is the lowest. As a multiple imputation method, PMM reduces bias and therefore results in better prediction than the single imputation methods.
+```
+
